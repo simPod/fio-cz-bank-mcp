@@ -1,0 +1,18 @@
+{
+  "accounts": [
+    {
+      "name": "personal",
+      "accountNumber": "1234567890",
+      "currency": "CZK",
+      "tokenEnv": "FIO_PERSONAL_TOKEN",
+      "canSubmit": true
+    },
+    {
+      "name": "business",
+      "accountNumber": "9876543210",
+      "currency": "CZK",
+      "tokenEnv": "FIO_BUSINESS_TOKEN",
+      "canSubmit": false
+    }
+  ]
+}

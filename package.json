@@ -1,0 +1,27 @@
+{
+  "name": "fio-cz-bank-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local MCP server for Fio banka account history and CZK payments for approval",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": { "fio-cz-bank-mcp": "dist/index.js" },
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "fast-xml-parser": "5.11.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@types/node": "24.19.2",
+    "tsx": "4.20.6",
+    "typescript": "7.0.2"
+  }
+}

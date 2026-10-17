@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.*
+accounts.json
+*.log
+.DS_Store
+AGENTS.local.md
