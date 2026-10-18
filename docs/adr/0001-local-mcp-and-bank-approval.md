@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the initial private version. Implements the [product requirements](../requirements.md).
+Accepted for the initial private version; superseded by [ADR 0002](0002-numbered-statements-and-fio-approval.md). Implements the [product requirements](../requirements.md).
 
 ## Context
 

@@ -29,15 +29,28 @@ export interface Transaction {
   payerReference?: string;
 }
 
-export interface Statement {
+export interface AccountDetails {
   accountNumber: string;
   currency: string;
   iban: string;
+  bankCode?: string;
+  bic?: string;
+}
+
+export interface Statement extends AccountDetails {
   openingBalance: string;
   closingBalance: string;
   dateFrom: string;
   dateTo: string;
   transactions: Transaction[];
+}
+
+export type StatementFormat = 'pdf' | 'csv' | 'xml' | 'gpc';
+
+export interface StatementDownload {
+  bytes: Uint8Array;
+  accountNumber?: string;
+  currency?: string;
 }
 
 export interface ImportResult {
@@ -49,6 +62,8 @@ export interface ImportResult {
 }
 
 export interface BankClient {
+  getAccountDetails(token: string, date: string): Promise<AccountDetails>;
   getStatement(token: string, dateFrom: string, dateTo: string): Promise<Statement>;
+  downloadStatement(token: string, year: number, statementNumber: number, format: StatementFormat): Promise<StatementDownload>;
   importPayments(token: string, xml: string): Promise<ImportResult>;
 }

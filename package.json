@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local MCP server for Fio banka account history and CZK payments for approval",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "bin": { "fio-cz-bank-mcp": "dist/index.js" },
   "engines": { "node": ">=24" },

@@ -1,16 +1,18 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import type { ImportResult, Statement } from '../src/contracts.js';
+import type { AccountDetails, ImportResult, Statement, StatementFormat } from '../src/contracts.js';
 import { FioError } from '../src/errors.js';
 import { FioClient } from '../src/fio.js';
 
 const token = 'a'.repeat(64);
 const from = '2026-09-01';
 const to = '2026-09-30';
-const info = '<Info><accountId>1234567890</accountId><bankId>2010</bankId><currency>CZK</currency><iban>CZ7920100000002111111111</iban><openingBalance>9007199254740993.10</openingBalance><closingBalance>-12.30</closingBalance><dateStart>2026-09-01+02:00</dateStart><dateEnd>2026-09-30+02:00</dateEnd></Info>';
+const info = '<Info><accountId>1234567890</accountId><bankId>2010</bankId><currency>CZK</currency><iban>CZ7920100000002111111111</iban><bic>FIOBCZPPXXX</bic><openingBalance>9007199254740993.10</openingBalance><closingBalance>-12.30</closingBalance><dateStart>2026-09-01+02:00</dateStart><dateEnd>2026-09-30+02:00</dateEnd></Info>';
 const transaction = `<Transaction><column_22 id="22">9007199254740993</column_22><column_0 id="0">2026-09-15+02:00</column_0><column_1 id="1">-9007199254740993.20</column_1><column_14 id="14">CZK</column_14><column_2 id="2">00123456</column_2><column_10 id="10">Example &amp; Co.</column_10><column_3 id="3">0100</column_3><column_12 id="12">Example Bank</column_12><column_5 id="5">0000123</column_5><column_4 id="4">0308</column_4><column_6 id="6">0009</column_6><column_7 id="7">Shop, Praha ${token}</column_7><column_16 id="16">Invoice</column_16><column_25 id="25">Paid</column_25><column_8 id="8">Transfer</column_8><column_9 id="9">Example Person</column_9><column_18 id="18">Card purchase</column_18><column_26 id="26">KOMBCZPPXXX</column_26><column_27 id="27">000ref</column_27><column_17 id="17">9007199254740995</column_17></Transaction>`;
 const statement = (transactions = transaction) => `<AccountStatement>${info}<TransactionList>${transactions}</TransactionList></AccountStatement>`;
 const importResponse = (status: string, code: string, extra = '<idInstruction>9007199254740993</idInstruction>', details = '') => `<responseImport><result><errorCode>${code}</errorCode>${extra}<status>${status}</status></result>${details}</responseImport>`;
+const gpcHeader = Buffer.concat([Buffer.from('0740000001234567890'), Buffer.from([0x8a]), Buffer.alloc(108, 0x20), Buffer.from('\r\n')]);
+const gpcMovement = Buffer.from(`0750000001234567890${'0'.repeat(99)}0203${'0'.repeat(6)}\r\n`);
 
 function checkError(code: string, message?: RegExp): (error: unknown) => boolean {
   return (error) => {
@@ -22,6 +24,25 @@ function checkError(code: string, message?: RegExp): (error: unknown) => boolean
   };
 }
 
+test('reads account details without requiring or validating unrelated balances and transactions', async () => {
+  const identity = '<accountId>1234567890</accountId><currency>CZK</currency><iban>CZ7920100000002111111111</iban><bankId>2010</bankId><bic>FIOBCZPPXXX</bic>';
+  for (const xml of [
+    `<AccountStatement><Info>${identity}</Info></AccountStatement>`,
+    `<AccountStatement><Info>${identity}<openingBalance>invalid</openingBalance><closingBalance><unexpected/></closingBalance></Info><TransactionList><Transaction><column_1>invalid</column_1></Transaction></TransactionList></AccountStatement>`,
+  ]) {
+    let calls = 0;
+    const client = new FioClient({ fetch: async (url) => {
+      calls++;
+      assert.equal(url, `https://fioapi.fio.cz/v1/rest/periods/${token}/${from}/${from}/transactions.xml`);
+      return new Response(xml);
+    } });
+    assert.deepEqual(await client.getAccountDetails(token, from), {
+      accountNumber: '1234567890', currency: 'CZK', iban: 'CZ7920100000002111111111', bankCode: '2010', bic: 'FIOBCZPPXXX',
+    } satisfies AccountDetails);
+    assert.equal(calls, 1);
+  }
+});
+
 test('reads exact statement values from XML without numeric conversion', async () => {
   const client = new FioClient({ fetch: async (url, init) => {
     assert.equal(url, `https://fioapi.fio.cz/v1/rest/periods/${token}/${from}/${to}/transactions.xml`);
@@ -31,15 +52,101 @@ test('reads exact statement values from XML without numeric conversion', async (
     return new Response(statement());
   } });
   assert.deepEqual(await client.getStatement(token, from, to), {
-    accountNumber: '1234567890', currency: 'CZK', iban: 'CZ7920100000002111111111', openingBalance: '9007199254740993.10', closingBalance: '-12.30', dateFrom: from, dateTo: to,
+    accountNumber: '1234567890', currency: 'CZK', iban: 'CZ7920100000002111111111', bankCode: '2010', bic: 'FIOBCZPPXXX', openingBalance: '9007199254740993.10', closingBalance: '-12.30', dateFrom: from, dateTo: to,
     transactions: [{ id: '9007199254740993', date: '2026-09-15+02:00', amount: '-9007199254740993.20', currency: 'CZK', counterAccount: '00123456', counterAccountName: 'Example & Co.', bankCode: '0100', bankName: 'Example Bank', variableSymbol: '0000123', constantSymbol: '0308', specificSymbol: '0009', userIdentification: 'Shop, Praha [REDACTED]', message: 'Invoice', comment: 'Paid', type: 'Transfer', performedBy: 'Example Person', detail: 'Card purchase', bic: 'KOMBCZPPXXX', payerReference: '000ref', orderId: '9007199254740995' }],
   } satisfies Statement);
 });
 
-test('accepts empty or omitted transaction lists and an omitted bank ID', async () => {
-  for (const xml of [statement(''), statement('').replace('<TransactionList></TransactionList>', ''), statement('').replace('<bankId>2010</bankId>', '')]) {
+test('accepts empty or omitted transaction lists and omitted optional bank details', async () => {
+  for (const xml of [statement(''), statement('').replace('<TransactionList></TransactionList>', ''), statement('').replace('<bankId>2010</bankId>', '').replace('<bic>FIOBCZPPXXX</bic>', '')]) {
     const client = new FioClient({ fetch: async () => new Response(xml) });
     assert.deepEqual((await client.getStatement(token, from, to)).transactions, []);
+  }
+});
+
+test('downloads numbered statement bytes unchanged across binary and text formats with one request', async () => {
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.7\r\n'), Buffer.from([0xff, 0x00, 0x80]), Buffer.from('\r\n%%EOF\r\n')]);
+  const cases = [
+    ['pdf', pdf],
+    ['csv', Buffer.from('\uFEFF"Date";"Message"\r\n"2026-09-15";"Příjem\nplatby ""789"""\r\n')],
+    ['xml', Buffer.from('\uFEFF<?xml version="1.0" encoding="UTF-8"?>\r\n' + statement('').replace('</Info>', '<note>Příjem</note></Info>'))],
+    ['gpc', gpcHeader],
+    ['gpc', Buffer.concat([gpcHeader, gpcMovement])],
+  ] satisfies Array<[StatementFormat, Buffer]>;
+  for (const [format, bytes] of cases) {
+    let calls = 0;
+    const client = new FioClient({ fetch: async (url, init) => {
+      calls++;
+      assert.equal(url, `https://fioapi.fio.cz/v1/rest/by-id/${token}/2026/37/transactions.${format}`);
+      assert.equal(init?.method, 'GET');
+      assert.equal(init.redirect, 'error');
+      return new Response(new ReadableStream({ start(controller) {
+        for (let i = 0; i < bytes.length; i++) controller.enqueue(bytes.subarray(i, i + 1));
+        controller.close();
+      } }));
+    } });
+    const download = await client.downloadStatement(token, 2026, 37, format);
+    assert.deepEqual(download.bytes, bytes);
+    assert.equal(calls, 1);
+    if (format === 'xml') {
+      assert.equal(download.accountNumber, '1234567890');
+      assert.equal(download.currency, 'CZK');
+    } else if (format === 'gpc') {
+      assert.equal(download.accountNumber, '0000001234567890');
+      assert.equal(download.currency, undefined);
+    }
+  }
+});
+
+test('accepts optional XML account fields without inventing missing identity', async () => {
+  for (const xml of ['<AccountStatement><Info/></AccountStatement>', '<AccountStatement><Info><currency>EUR</currency></Info></AccountStatement>']) {
+    const client = new FioClient({ fetch: async () => new Response(xml) });
+    const download = await client.downloadStatement(token, 2026, 1, 'xml');
+    assert.equal(download.accountNumber, undefined);
+    assert.equal(download.currency, xml.includes('EUR') ? 'EUR' : undefined);
+    assert.equal(Buffer.from(download.bytes).toString(), xml);
+  }
+});
+
+test('rejects invalid or token-bearing files without returning or rewriting bank content', async () => {
+  const cases = [
+    ['pdf', '<html>Not a statement</html>'],
+    ['pdf', `%PDF-1.7\n${token}\n%%EOF`],
+    ['csv', '<html>Error;not CSV</html>'],
+    ['csv', 'error'],
+    ['csv', '"Message";"Unclosed'],
+    ['csv', Buffer.from([0xff, 0x3b])],
+    ['csv', 'message;\u0000invalid'],
+    ['csv', `message;${token}`],
+    ['gpc', '<html>Not a statement</html>'],
+    ['gpc', Buffer.concat([Buffer.from('075'), gpcHeader.subarray(3)])],
+    ['gpc', Buffer.concat([gpcHeader.subarray(0, 3), Buffer.from([0xb0]), gpcHeader.subarray(4)])],
+    ['gpc', gpcHeader.subarray(0, -1)],
+    ['gpc', Buffer.concat([gpcHeader.subarray(0, 128), Buffer.from('\n\r')])],
+    ['gpc', Buffer.concat([gpcHeader, gpcMovement.subarray(0, 128), Buffer.from('\n\r')])],
+    ['gpc', `0740000001234567890${token}${' '.repeat(45)}\r\n`],
+    ['xml', '<AccountStatement>'],
+    ['xml', '<error>Unavailable</error>'],
+    ['xml', '<AccountStatement><Info><currency>invalid</currency></Info></AccountStatement>'],
+    ['xml', `<AccountStatement><Info/><note>${token}</note></AccountStatement>`],
+    ['xml', `<AccountStatement><Info/><note>${'&#97;'.repeat(64)}</note></AccountStatement>`],
+    ['xml', '<!DOCTYPE AccountStatement><AccountStatement><Info/></AccountStatement>'],
+  ] satisfies Array<[StatementFormat, string | Buffer]>;
+  for (const [format, body] of cases) {
+    let calls = 0;
+    const client = new FioClient({ fetch: async () => { calls++; return new Response(typeof body === 'string' ? body : Uint8Array.from(body)); } });
+    await assert.rejects(client.downloadStatement(token, 2026, 1, format), checkError('RESPONSE'));
+    assert.equal(calls, 1);
+  }
+});
+
+test('bounds statement downloads at 10 MiB before embedding', async () => {
+  for (const size of [10 * 1024 * 1024, 10 * 1024 * 1024 + 1]) {
+    const bytes = Buffer.alloc(size);
+    bytes.write('%PDF-1.7\n');
+    const client = new FioClient({ fetch: async () => new Response(bytes) });
+    if (size === 10 * 1024 * 1024) assert.deepEqual((await client.downloadStatement(token, 2026, 1, 'pdf')).bytes, bytes);
+    else await assert.rejects(client.downloadStatement(token, 2026, 1, 'pdf'), checkError('RESPONSE', /10 MiB/));
   }
 });
 

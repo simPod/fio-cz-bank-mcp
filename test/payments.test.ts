@@ -77,7 +77,7 @@ test('createPaymentBatch accepts today and future dates but rejects any past tra
   });
 });
 
-test('createPaymentBatch bounds a complete confirmation to 1–100 payments', () => {
+test('createPaymentBatch bounds a batch to 1–100 payments', () => {
   const payment = paymentSchema.parse(input);
   for (const count of [0, 101]) {
     assert.throws(() => createPaymentBatch('business', '2000145399', Array<Payment>(count).fill(payment), '2028-02-29'), /between 1 and 100/);
